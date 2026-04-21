@@ -1,0 +1,283 @@
+-- blackjack
+-- Needs:
+--   blackjack
+--   win.dfpwm
+--   lose.dfpwm
+-- Also place a Speaker next to the computer.
+
+math.randomseed(os.epoch("utc"))
+
+local dfpwm = require("cc.audio.dfpwm")
+local speaker = peripheral.find("speaker")
+
+local function clear()
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.white)
+  term.clear()
+  term.setCursorPos(1, 1)
+end
+
+local function center(y, text, color)
+  local w = term.getSize()
+  local x = math.floor((w - #text) / 2) + 1
+  term.setCursorPos(math.max(1, x), y)
+  if color then term.setTextColor(color) end
+  term.write(text)
+  term.setTextColor(colors.white)
+end
+
+local function waitKey()
+  write("\nPress Enter to continue...")
+  read()
+end
+
+local function playSoundFile(path)
+  if not speaker then return end
+  if not fs.exists(path) then return end
+
+  local decoder = dfpwm.make_decoder()
+  local file = fs.open(path, "rb")
+  if not file then return end
+
+  while true do
+    local chunk = file.read(16 * 1024)
+    if not chunk then break end
+
+    local buffer = decoder(chunk)
+
+    while not speaker.playAudio(buffer) do
+      os.pullEvent("speaker_audio_empty")
+    end
+  end
+
+  file.close()
+end
+
+local function getCard()
+  local value = math.random(1, 13)
+  if value == 1 then
+    return { name = "A", rank = 11 }
+  elseif value == 11 then
+    return { name = "J", rank = 10 }
+  elseif value == 12 then
+    return { name = "Q", rank = 10 }
+  elseif value == 13 then
+    return { name = "K", rank = 10 }
+  else
+    return { name = tostring(value), rank = value }
+  end
+end
+
+local function handValue(hand)
+  local total = 0
+  local aces = 0
+
+  for _, card in ipairs(hand) do
+    total = total + card.rank
+    if card.name == "A" then
+      aces = aces + 1
+    end
+  end
+
+  while total > 21 and aces > 0 do
+    total = total - 10
+    aces = aces - 1
+  end
+
+  return total
+end
+
+local function handToString(hand, hideFirst)
+  local parts = {}
+
+  for i, card in ipairs(hand) do
+    if hideFirst and i == 1 then
+      table.insert(parts, "[?]")
+    else
+      table.insert(parts, "[" .. card.name .. "]")
+    end
+  end
+
+  return table.concat(parts, " ")
+end
+
+local function drawGame(playerHand, dealerHand, bank, bet, hideDealer)
+  clear()
+  center(1, "=== BLACKJACK ===", colors.yellow)
+
+  term.setCursorPos(2, 3)
+  write("Bank: $" .. bank)
+  term.setCursorPos(2, 4)
+  write("Bet:  $" .. bet)
+
+  term.setCursorPos(2, 6)
+  write("Dealer: " .. handToString(dealerHand, hideDealer))
+
+  if not hideDealer then
+    term.setCursorPos(2, 7)
+    write("Value: " .. handValue(dealerHand))
+  end
+
+  term.setCursorPos(2, 9)
+  write("Player: " .. handToString(playerHand, false))
+  term.setCursorPos(2, 10)
+  write("Value: " .. handValue(playerHand))
+end
+
+local function getBet(bank)
+  while true do
+    clear()
+    center(1, "=== PLACE YOUR BET ===", colors.lime)
+    term.setCursorPos(2, 3)
+    write("Bank: $" .. bank)
+    term.setCursorPos(2, 5)
+    write("Enter bet amount: ")
+
+    local input = read()
+    local bet = tonumber(input)
+
+    if bet and bet >= 1 and bet <= bank and math.floor(bet) == bet then
+      return bet
+    end
+
+    term.setCursorPos(2, 7)
+    term.setTextColor(colors.red)
+    write("Invalid bet. Use a whole number from 1 to " .. bank .. ".")
+    term.setTextColor(colors.white)
+    sleep(1.5)
+  end
+end
+
+local function playerTurn(playerHand, dealerHand, bank, bet)
+  while true do
+    drawGame(playerHand, dealerHand, bank, bet, true)
+
+    local total = handValue(playerHand)
+    if total > 21 then
+      return "bust"
+    end
+
+    term.setCursorPos(2, 12)
+    write("[H]it or [S]tand? ")
+
+    local choice = string.lower(read())
+
+    if choice == "h" or choice == "hit" then
+      table.insert(playerHand, getCard())
+    elseif choice == "s" or choice == "stand" then
+      return "stand"
+    end
+  end
+end
+
+local function dealerTurn(dealerHand)
+  while handValue(dealerHand) < 17 do
+    table.insert(dealerHand, getCard())
+  end
+end
+
+local function roundResult(playerHand, dealerHand)
+  local playerTotal = handValue(playerHand)
+  local dealerTotal = handValue(dealerHand)
+
+  if playerTotal > 21 then
+    return "lose", "You busted."
+  elseif dealerTotal > 21 then
+    return "win", "Dealer busted."
+  elseif playerTotal > dealerTotal then
+    return "win", "You beat the dealer."
+  elseif playerTotal < dealerTotal then
+    return "lose", "Dealer wins."
+  else
+    return "push", "Push."
+  end
+end
+
+local function askPlayAgain()
+  term.setCursorPos(2, 16)
+  write("Play again? [Y/N]: ")
+  local answer = string.lower(read())
+  return answer == "y" or answer == "yes"
+end
+
+local function main()
+  local bank = 100
+
+  while bank > 0 do
+    local bet = getBet(bank)
+
+    local playerHand = { getCard(), getCard() }
+    local dealerHand = { getCard(), getCard() }
+
+    local playerBlackjack = handValue(playerHand) == 21
+    local dealerBlackjack = handValue(dealerHand) == 21
+
+    if playerBlackjack or dealerBlackjack then
+      drawGame(playerHand, dealerHand, bank, bet, false)
+
+      local result, message
+      if playerBlackjack and dealerBlackjack then
+        result, message = "push", "Both have blackjack."
+      elseif playerBlackjack then
+        result, message = "blackjack", "Blackjack! You win."
+      else
+        result, message = "lose", "Dealer has blackjack."
+      end
+
+      term.setCursorPos(2, 13)
+      if result == "blackjack" then
+        local payout = math.floor(bet * 1.5)
+        bank = bank + payout
+        write(message .. " +" .. payout)
+        playSoundFile("win.dfpwm")
+      elseif result == "lose" then
+        bank = bank - bet
+        write(message .. " -" .. bet)
+        playSoundFile("lose.dfpwm")
+      else
+        write(message)
+      end
+
+      if bank <= 0 then break end
+      if not askPlayAgain() then return end
+    else
+      local playerState = playerTurn(playerHand, dealerHand, bank, bet)
+
+      if playerState == "bust" then
+        drawGame(playerHand, dealerHand, bank, bet, false)
+        bank = bank - bet
+        term.setCursorPos(2, 13)
+        write("You busted. -" .. bet)
+        playSoundFile("lose.dfpwm")
+      else
+        dealerTurn(dealerHand)
+        drawGame(playerHand, dealerHand, bank, bet, false)
+
+        local result, message = roundResult(playerHand, dealerHand)
+
+        term.setCursorPos(2, 13)
+        if result == "win" then
+          bank = bank + bet
+          write(message .. " +" .. bet)
+          playSoundFile("win.dfpwm")
+        elseif result == "lose" then
+          bank = bank - bet
+          write(message .. " -" .. bet)
+          playSoundFile("lose.dfpwm")
+        else
+          write(message)
+        end
+      end
+
+      if bank <= 0 then break end
+      if not askPlayAgain() then return end
+    end
+  end
+
+  clear()
+  center(7, "GAME OVER - You are out of money.", colors.red)
+  playSoundFile("lose.dfpwm")
+  waitKey()
+end
+
+main()
